@@ -1,3 +1,6 @@
-altair
+folium
+geopy
+openpyxl
 pandas
 streamlit
+streamlit-folium
