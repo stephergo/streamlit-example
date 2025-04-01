@@ -184,7 +184,8 @@ def init_session_state(map:MapConfig, pin:PinConfig)->None:
         'available_columns': [],  # Stockera les colonnes disponibles du fichier Excel importé
         'field_labels': {},  # Stockera les libellés personnalisés pour chaque champ
         'tooltip_field': 'adresse_complete',  # Champ à utiliser pour le tooltip
-        'tooltip_max_length': 50  # Longueur maximale du tooltip
+        'tooltip_max_length': 50,  # Longueur maximale du tooltip
+        'rerun_in_progress': False  # Flag pour éviter les reruns en cascade
     }
     
     for key, default_value in defaults.items():
@@ -414,13 +415,21 @@ def show_sidebar_options():
         # Mettre à jour la carte si nécessaire
         if options_changed and st.session_state.geocoding_complete:
             st.session_state.map = create_folium_map(st.session_state.geocoded_df)
-            st.rerun()
+            
+            # Éviter les reruns en cascade avec un flag
+            if not st.session_state.rerun_in_progress:
+                st.session_state.rerun_in_progress = True
+                st.rerun()
         
         # Bouton d'actualisation manuel
         if st.session_state.geocoding_complete:
             if st.button("🔄 Actualiser la carte"):
                 st.session_state.map = create_folium_map(st.session_state.geocoded_df)
-                st.rerun()
+                
+                # Éviter les reruns en cascade avec un flag
+                if not st.session_state.rerun_in_progress:
+                    st.session_state.rerun_in_progress = True
+                    st.rerun()
                 
 def create_custom_popup_content(row: pd.Series) -> str:
     """Crée un contenu de popup personnalisé basé sur les champs sélectionnés"""
@@ -714,6 +723,10 @@ def display_results(geocoded_df, stats):
 def main():
     # Application des styles
     apply_custom_styles()
+    
+    # Réinitialiser le flag de rerun au début de chaque cycle
+    if 'rerun_in_progress' in st.session_state and st.session_state.rerun_in_progress:
+        st.session_state.rerun_in_progress = False
     
     map = MapConfig(
     title="Ma carte",
