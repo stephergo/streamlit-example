@@ -19,6 +19,7 @@ from typing import Optional, Tuple
 from dataclasses import dataclass
 import random
 import time
+import uuid  # Pour générer des clés uniques mais stables
 
 # Configuration de la page
 st.set_page_config(
@@ -185,7 +186,10 @@ def init_session_state(map:MapConfig, pin:PinConfig)->None:
         'field_labels': {},  # Stockera les libellés personnalisés pour chaque champ
         'tooltip_field': 'adresse_complete',  # Champ à utiliser pour le tooltip
         'tooltip_max_length': 50,  # Longueur maximale du tooltip
-        'rerun_in_progress': False  # Flag pour éviter les reruns en cascade
+        'rerun_in_progress': False,  # Flag pour éviter les reruns en cascade
+        'map_stabilized': False,    # Flag pour stabiliser l'affichage de la carte
+        'last_map_update': None,    # Timestamp de la dernière mise à jour de carte
+        'map_key': str(uuid.uuid4())  # Clé unique mais stable pour la carte
     }
     
     for key, default_value in defaults.items():
@@ -250,8 +254,6 @@ def apply_custom_styles():
         </style>
     ''', unsafe_allow_html=True)
 
- 
-    
 def show_sidebar_options():
     """Affiche les options de personnalisation dans le panneau latéral"""
     with st.sidebar:
@@ -414,23 +416,29 @@ def show_sidebar_options():
             
         # Mettre à jour la carte si nécessaire
         if options_changed and st.session_state.geocoding_complete:
+            # Réinitialiser le flag de stabilisation pour permettre une mise à jour intentionnelle
+            st.session_state.map_stabilized = False
             st.session_state.map = create_folium_map(st.session_state.geocoded_df)
             
-            # Éviter les reruns en cascade avec un flag
-            if not st.session_state.rerun_in_progress:
+            # Éviter les reruns en cascade avec un flag et ne pas recharger si la carte est déjà stable
+            if not st.session_state.rerun_in_progress and not st.session_state.map_stabilized:
+                st.session_state.last_map_update = time.time()
                 st.session_state.rerun_in_progress = True
                 st.rerun()
         
         # Bouton d'actualisation manuel
         if st.session_state.geocoding_complete:
             if st.button("🔄 Actualiser la carte"):
+                # Forcer la mise à jour même si la carte est stabilisée
+                st.session_state.map_stabilized = False
                 st.session_state.map = create_folium_map(st.session_state.geocoded_df)
                 
                 # Éviter les reruns en cascade avec un flag
                 if not st.session_state.rerun_in_progress:
+                    st.session_state.last_map_update = time.time()
                     st.session_state.rerun_in_progress = True
                     st.rerun()
-                
+
 def create_custom_popup_content(row: pd.Series) -> str:
     """Crée un contenu de popup personnalisé basé sur les champs sélectionnés"""
     content = '<div style="width:200px;padding:10px;background-color:#fff;border-radius:5px;">'
@@ -469,8 +477,6 @@ def create_pin_icon() -> DivIcon:
         icon_anchor=(16, 32),
         html=pin_html
     )
-
-
 
 def create_folium_map(df):
     """Crée une carte Folium avec les options personnalisées"""
@@ -573,6 +579,77 @@ def create_folium_map(df):
 
     return m
 
+def display_results(geocoded_df, stats):
+    """Affiche les résultats du géocodage"""
+    # Affichage des statistiques
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total d'adresses", stats['total_rows'])
+    with col2:
+        st.metric("Adresses géocodées", stats['success_count'])
+    with col3:
+        st.metric("Taux de réussite", f"{stats['success_rate']:.1%}")
+
+    # Création et affichage de la carte
+    st.markdown("### 🗺️ Résultats du géocodage")
+    
+    # Éviter d'invoquer st_folium d'une manière qui déclencherait un rerendering
+    # Utiliser une clé unique mais stable pour le composant folium
+    if 'map_key' not in st.session_state:
+        st.session_state.map_key = str(uuid.uuid4())
+    
+    # Stabiliser l'affichage de la carte pour éviter les rerenders constants
+    folium_static_result = st_folium(
+        st.session_state.map, 
+        width=1200, 
+        height=600,
+        returned_objects=[],  # Ne retourne AUCUN objet pour éviter des rerenders
+        key=st.session_state.map_key  # Utiliser une clé stable
+    )
+    
+    # Marquer la carte comme stabilisée pour éviter les rafraîchissements inutiles
+    if not st.session_state.map_stabilized:
+        st.session_state.map_stabilized = True
+
+    # Génération des noms de fichiers basés sur le titre de la carte
+    # Remplacer les espaces par des underscores et nettoyer le titre pour un nom de fichier valide
+    safe_filename = st.session_state.map_title.strip().replace(' ', '_').replace('/', '_').replace('\\', '_')
+    safe_filename = ''.join(c for c in safe_filename if c.isalnum() or c in '_-.')
+    
+    # Si après nettoyage le nom est vide, utiliser un nom par défaut
+    if not safe_filename:
+        safe_filename = "carte_geocodage"
+    
+    html_filename = f"{safe_filename}.html"
+    excel_filename = f"{safe_filename}.xlsx"
+
+    # Boutons de téléchargement
+    col1, col2 = st.columns(2)
+    with col1:
+        # Carte HTML
+        html_buffer = io.BytesIO()
+        st.session_state.map.save(html_buffer, close_file=False)
+        st.download_button(
+            "📥 Télécharger la carte (HTML)",
+            data=html_buffer,
+            file_name=html_filename,
+            mime="text/html"
+        )
+
+    with col2:
+        # Fichier Excel
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            geocoded_df.to_excel(writer, sheet_name='Resultats', index=False)
+        st.download_button(
+            "📥 Télécharger les résultats (Excel)",
+            data=excel_buffer,
+            file_name=excel_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    st.success(f"✅ Géocodage terminé en {stats['processing_time']}")
+
 def process_uploaded_file(uploaded_file):
     """Traite le fichier uploadé et retourne un DataFrame"""
     try:
@@ -666,60 +743,6 @@ def perform_geocoding(df):
         'processing_time': processing_time
     }
 
-def display_results(geocoded_df, stats):
-    """Affiche les résultats du géocodage"""
-    # Affichage des statistiques
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total d'adresses", stats['total_rows'])
-    with col2:
-        st.metric("Adresses géocodées", stats['success_count'])
-    with col3:
-        st.metric("Taux de réussite", f"{stats['success_rate']:.1%}")
-
-    # Création et affichage de la carte
-    st.markdown("### 🗺️ Résultats du géocodage")
-    st_folium(st.session_state.map, width=1200, height=600)
-
-    # Génération des noms de fichiers basés sur le titre de la carte
-    # Remplacer les espaces par des underscores et nettoyer le titre pour un nom de fichier valide
-    safe_filename = st.session_state.map_title.strip().replace(' ', '_').replace('/', '_').replace('\\', '_')
-    safe_filename = ''.join(c for c in safe_filename if c.isalnum() or c in '_-.')
-    
-    # Si après nettoyage le nom est vide, utiliser un nom par défaut
-    if not safe_filename:
-        safe_filename = "carte_geocodage"
-    
-    html_filename = f"{safe_filename}.html"
-    excel_filename = f"{safe_filename}.xlsx"
-
-    # Boutons de téléchargement
-    col1, col2 = st.columns(2)
-    with col1:
-        # Carte HTML
-        html_buffer = io.BytesIO()
-        st.session_state.map.save(html_buffer, close_file=False)
-        st.download_button(
-            "📥 Télécharger la carte (HTML)",
-            data=html_buffer,
-            file_name=html_filename,
-            mime="text/html"
-        )
-
-    with col2:
-        # Fichier Excel
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            geocoded_df.to_excel(writer, sheet_name='Resultats', index=False)
-        st.download_button(
-            "📥 Télécharger les résultats (Excel)",
-            data=excel_buffer,
-            file_name=excel_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-    st.success(f"✅ Géocodage terminé en {stats['processing_time']}")
-
 def main():
     # Application des styles
     apply_custom_styles()
@@ -727,6 +750,16 @@ def main():
     # Réinitialiser le flag de rerun au début de chaque cycle
     if 'rerun_in_progress' in st.session_state and st.session_state.rerun_in_progress:
         st.session_state.rerun_in_progress = False
+    
+    # Gestion de la stabilité de la carte
+    current_time = time.time()
+    if 'last_map_update' in st.session_state and st.session_state.last_map_update:
+        # Empêcher les mises à jour trop fréquentes (moins de 2 secondes d'écart)
+        if current_time - st.session_state.last_map_update < 2:
+            st.session_state.map_stabilized = True
+        elif current_time - st.session_state.last_map_update > 10:
+            # Réinitialiser après un certain temps pour permettre des mises à jour intentionnelles
+            st.session_state.map_stabilized = False
     
     map = MapConfig(
     title="Ma carte",
@@ -793,6 +826,18 @@ def main():
     # Affichage des résultats
     if st.session_state.geocoding_complete:
         display_results(st.session_state.geocoded_df, st.session_state.geocoding_stats)
+
+    # Éviter les reruns en cascade avec un flag
+    if not st.session_state.rerun_in_progress and not st.session_state.map_stabilized:
+        st.session_state.last_map_update = time.time()
+        st.session_state.rerun_in_progress = True
+        st.rerun()
+        
+    # Éviter les reruns en cascade avec un flag
+    if not st.session_state.rerun_in_progress and not st.session_state.map_stabilized:
+        st.session_state.last_map_update = time.time()
+        st.session_state.rerun_in_progress = True
+        st.rerun()
 
 if __name__ == "__main__":
     main()
