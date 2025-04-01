@@ -177,9 +177,14 @@ def init_session_state(map:MapConfig, pin:PinConfig)->None:
         'pin_scale': f'{pin.scale}',
         'opacity': f'{pin.opacity}',
         'marker_color': f'{pin.primary_color}',
+        'marker_color1': f'{pin.secondary_color}',
         'secondary_color': f'{pin.secondary_color}',# Rouge en hexadécimal au lieu de 'red'
         'map_title': f'{map.title}',
-        'custom_popup_fields': ['adresse_complete', 'service_geocodage', 'type_adresse']
+        'custom_popup_fields': ['adresse_complete', 'service_geocodage', 'type_adresse'],
+        'available_columns': [],  # Stockera les colonnes disponibles du fichier Excel importé
+        'field_labels': {},  # Stockera les libellés personnalisés pour chaque champ
+        'tooltip_field': 'adresse_complete',  # Champ à utiliser pour le tooltip
+        'tooltip_max_length': 50  # Longueur maximale du tooltip
     }
     
     for key, default_value in defaults.items():
@@ -191,7 +196,7 @@ def apply_custom_styles():
     st.markdown('''
         <style>
         .stApp {
-            max-width: 1200px;
+            max-width: 1920px;
             margin: 0 auto;
         }
         .element-container {
@@ -250,41 +255,138 @@ def show_sidebar_options():
     """Affiche les options de personnalisation dans le panneau latéral"""
     with st.sidebar:
         st.title("⚙️ Options d'affichage")
-        
-        # Section Marqueurs
-        st.header("🎯 Options des marqueurs")
-        
-        use_clusters = st.toggle(
-            "Utiliser le regroupement de marqueurs",
-            value=st.session_state.use_clusters,
-            help="Active/désactive le regroupement des marqueurs proches"
-        )
-        
-        # Sélection de la couleur
-        marker_color = st.color_picker(
-            "Couleur des marqueurs",
-            value=st.session_state.marker_color,
-            help="Choisissez la couleur des marqueurs sur la carte"
-        )
-        
         # Section Titre
-        st.header("📝 Personnalisation du titre")
+        st.header("📝 Carte")
         map_title = st.text_input(
             "Titre de la carte",
             value=st.session_state.map_title,
             help="Ce titre apparaîtra sur la carte"
         )
+                
+        # Section Marqueurs
+        st.header("🎯 Marqueurs")
+        with st.expander("Personnalisation des marqueurs"):
+            use_clusters = st.toggle(
+                "Marqueurs regroupés",
+                value=st.session_state.use_clusters,
+                help="Active/désactive le regroupement des marqueurs proches"
+            )
+            
+            col1,col2,col3=st.columns([1,1,2])
+            # Sélection de la couleur
+            with col1:
+                marker_color = st.color_picker(
+                    "Couleur1",
+                    value=st.session_state.marker_color,
+                    #help="Choisissez la couleur des marqueurs sur la carte"
+            )
+            with col2:
+                marker_color1 = st.color_picker(
+                    "Couleur2",
+                    value=st.session_state.marker_color1,
+                    #help="Choisissez la couleur des marqueurs sur la carte"
+            )
+
+            
+            # selection de l'opacité
+            opacity = st.slider(
+                "Opacité des marqueurs",
+                min_value=0.1,
+                max_value=1.0,
+                value=float(st.session_state.opacity),
+                help="Réglez l'opacité des marqueurs sur la carte"
+            )
+            
+            # Échelle de l'icône de marqueur
+            pin_scale = st.slider(
+                "Échelle de l'icône de marqueur",
+                min_value=0.1,
+                max_value=2.0,
+                value=float(st.session_state.pin_scale),
+                help="Réglez la taille de l'icône de marqueur sur la carte"
+            )
         
-        # Section Popup
-        st.header("💭 Contenu des popups")
-        available_fields = ['adresse_complete', 'service_geocodage', 'type_adresse']
-        custom_popup_fields = st.multiselect(
-            "Informations à afficher dans les popups",
-            options=available_fields,
-            default=st.session_state.custom_popup_fields,
-            help="Sélectionnez les informations à afficher dans les popups des marqueurs"
-        )
+
+        # Section Popup et Tooltip
+        with st.expander("Personnalisation des infobulles   💭 "):
+                
+            st.header("💭 Popups & Tooltips")
+            
+            # Utiliser les colonnes disponibles du DataFrame si elles existent
+            available_fields = st.session_state.available_columns
+            
+            if st.session_state.file_uploaded and len(available_fields) > 0:
+                st.subheader("📌 Popup (clic)")
+                # Sélection des champs à afficher dans les popups
+                custom_popup_fields = st.multiselect(
+                    "Informations à afficher dans les popups",
+                    options=available_fields,
+                    default=st.session_state.custom_popup_fields if set(st.session_state.custom_popup_fields).issubset(set(available_fields)) else available_fields[:min(3, len(available_fields))],
+                    help="Sélectionnez les informations à afficher dans les popups des marqueurs"
+                )
+                
+                # Interface pour personnaliser les labels des champs
+                st.markdown("##### Labels personnalisés pour les champs")
+                field_labels = {}
+                
+                # Si la sélection a changé, réinitialiser les labels
+                if set(custom_popup_fields) != set(st.session_state.custom_popup_fields):
+                    st.session_state.field_labels = {field: field.replace('_', ' ').title() for field in custom_popup_fields}
+                
+                # Création des champs de texte pour personnaliser les labels
+                for field in custom_popup_fields:
+                    default_label = st.session_state.field_labels.get(field, field.replace('_', ' ').title())
+                    field_labels[field] = st.text_input(
+                        f"Label pour {field}",
+                        value=default_label,
+                        key=f"label_{field}"
+                    )
+                
+                # Mise à jour des labels personnalisés
+                st.session_state.field_labels = field_labels
+                
+                # Section Tooltip (survol)
+                st.subheader("🔍 Tooltip (survol)")
+                tooltip_field = st.selectbox(
+                    "Champ à afficher au survol",
+                    options=available_fields,
+                    index=available_fields.index(st.session_state.tooltip_field) if st.session_state.tooltip_field in available_fields else 0,
+                    help="Ce champ sera affiché lorsque l'utilisateur survole un marqueur"
+                )
+                
+                tooltip_max_length = st.slider(
+                    "Longueur maximale du tooltip",
+                    min_value=10,
+                    max_value=200,
+                    value=st.session_state.tooltip_max_length,
+                    help="Nombre maximal de caractères à afficher dans le tooltip"
+                )
+                
+                # Mise à jour des valeurs de session pour le tooltip
+                if tooltip_field != st.session_state.tooltip_field:
+                    st.session_state.tooltip_field = tooltip_field
+                    options_changed = True
+                    
+                if tooltip_max_length != st.session_state.tooltip_max_length:
+                    st.session_state.tooltip_max_length = tooltip_max_length
+                    options_changed = True
+            else:
+                # Texte par défaut si aucun fichier n'a été importé
+                st.info("Importez un fichier Excel pour personnaliser les champs à afficher")
+                custom_popup_fields = st.session_state.custom_popup_fields
         
+
+        st.markdown(
+            """
+            ---
+            Follow me on:
+            
+            LinkedIn → [Stephane DENIS](http://www.linkedin.com/in/stephane-denis-07344527)
+            
+            Copyright(c) 2024 - Stephane DENIS
+
+            """
+        )        
         # Détecter les changements
         options_changed = False
         if use_clusters != st.session_state.use_clusters:
@@ -293,11 +395,20 @@ def show_sidebar_options():
         if marker_color != st.session_state.marker_color:
             st.session_state.marker_color = marker_color
             options_changed = True
+        if marker_color1 != st.session_state.marker_color1:
+            st.session_state.marker_color1 = marker_color1
+            options_changed = True
         if map_title != st.session_state.map_title:
             st.session_state.map_title = map_title
             options_changed = True
-        if custom_popup_fields != st.session_state.custom_popup_fields:
+        if st.session_state.file_uploaded and len(available_fields) > 0 and custom_popup_fields != st.session_state.custom_popup_fields:
             st.session_state.custom_popup_fields = custom_popup_fields
+            options_changed = True
+        if opacity != float(st.session_state.opacity):
+            st.session_state.opacity = str(opacity)
+            options_changed = True
+        if pin_scale != float(st.session_state.pin_scale):
+            st.session_state.pin_scale = str(pin_scale)
             options_changed = True
             
         # Mettre à jour la carte si nécessaire
@@ -315,19 +426,18 @@ def create_custom_popup_content(row: pd.Series) -> str:
     """Crée un contenu de popup personnalisé basé sur les champs sélectionnés"""
     content = '<div style="width:200px;padding:10px;background-color:#fff;border-radius:5px;">'
     
-    field_labels = {
-        'adresse_complete': 'Adresse',
-        'service_geocodage': 'Service',
-        'type_adresse': 'Type'
-    }
-    
+    # Utiliser les labels personnalisés s'ils existent, sinon utiliser le nom du champ formaté
     for field in st.session_state.custom_popup_fields:
-        if pd.notna(row.get(field)):
-            content += f'<strong>{field_labels[field]}:</strong> {row[field]}<br>'
+        # Pour les séries pandas, nous utilisons .get() avec un second argument pour éviter les erreurs
+        # quand une clé n'existe pas, et pd.notna() pour vérifier si la valeur est valide
+        field_value = row.get(field, None)
+        if field_value is not None and pd.notna(field_value):
+            # Utiliser le label personnalisé ou formater le nom du champ
+            field_label = st.session_state.field_labels.get(field, field.replace('_', ' ').title())
+            content += f'<strong>{field_label}:</strong> {field_value}<br>'
     
     content += '</div>'
     return content
-
 
 def create_pin_icon() -> DivIcon:
     """Crée une icône de marqueur personnalisée"""
@@ -335,7 +445,7 @@ def create_pin_icon() -> DivIcon:
     <div>
         <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" style="enable-background:new 0 0 128 128;" transform="scale({st.session_state.pin_scale})">
             <style type="text/css">
-                .pin-main{{fill:{st.session_state.secondary_color};fill-opacity:{st.session_state.opacity};stroke:#000000;stroke-width:2}}
+                .pin-main{{fill:{st.session_state.marker_color1};fill-opacity:{st.session_state.opacity};stroke:#000000;stroke-width:2}}
                 .pin-circle{{fill:{st.session_state.marker_color};stroke:#000000;stroke-width:2}}
             </style>
             <g>
@@ -412,16 +522,34 @@ def create_folium_map(df):
     
     #marker_color = color_mapping.get(st.session_state.marker_color, 'red')  # 'red' comme couleur par défaut
     
+    # Pour debugging
+    if len(st.session_state.custom_popup_fields) == 0:
+        st.warning("Aucun champ sélectionné pour les popups. Utilisez le panneau latéral pour personnaliser les popups.")
+    
     # Ajout des marqueurs avec la couleur convertie
     for idx, row in valid_coords.iterrows():
         try:
             popup_content = create_custom_popup_content(row)
             
+            # Paramétrer le tooltip en fonction du champ sélectionné
+            tooltip_field = st.session_state.tooltip_field
+            tooltip_max_length = st.session_state.tooltip_max_length
+            
+            # Valeur par défaut pour le tooltip si le champ sélectionné n'est pas disponible
+            tooltip_value = "..."
+            
+            if tooltip_field in row and pd.notna(row[tooltip_field]):
+                tooltip_text = str(row[tooltip_field])
+                # Tronquer si nécessaire et ajouter "..." pour indiquer la troncature
+                if len(tooltip_text) > tooltip_max_length:
+                    tooltip_value = tooltip_text[:tooltip_max_length] + "..."
+                else:
+                    tooltip_value = tooltip_text
+            
             marker = folium.Marker(
                 location=[row['latitude'], row['longitude']],
                 popup=popup_content,
-                tooltip=row['adresse_complete'][:50] + "...",
-                #icon=folium.Icon(color='#481a6c', icon='info-sign'),
+                tooltip=tooltip_value,
                 icon=create_pin_icon(),
             )
             
@@ -445,6 +573,26 @@ def process_uploaded_file(uploaded_file):
         if not all(col in df.columns for col in required_columns):
             st.error("❌ Le fichier doit contenir les colonnes: street, postalcode, city")
             return None
+            
+        # Mettre à jour les colonnes disponibles pour les popups
+        st.session_state.available_columns = list(df.columns)
+        
+        # Ajouter les colonnes qui seront créées lors du géocodage
+        geocoding_columns = ['adresse_complete', 'service_geocodage', 'type_adresse', 'latitude', 'longitude', 'erreur_geocodage']
+        for col in geocoding_columns:
+            if col not in st.session_state.available_columns:
+                st.session_state.available_columns.append(col)
+        
+        # Mettre à jour les champs par défaut pour les popups si nécessaire
+        default_fields = ['adresse_complete', 'service_geocodage', 'type_adresse']
+        st.session_state.custom_popup_fields = [f for f in default_fields if f in st.session_state.available_columns]
+        
+        # Initialiser les labels personnalisés pour les champs par défaut
+        st.session_state.field_labels = {
+            'adresse_complete': 'Adresse',
+            'service_geocodage': 'Service',
+            'type_adresse': 'Type'
+        }
             
         st.success("✅ Fichier chargé avec succès!")
         return df
@@ -522,7 +670,19 @@ def display_results(geocoded_df, stats):
 
     # Création et affichage de la carte
     st.markdown("### 🗺️ Résultats du géocodage")
-    st_folium(st.session_state.map, width=800, height=600)
+    st_folium(st.session_state.map, width=1200, height=600)
+
+    # Génération des noms de fichiers basés sur le titre de la carte
+    # Remplacer les espaces par des underscores et nettoyer le titre pour un nom de fichier valide
+    safe_filename = st.session_state.map_title.strip().replace(' ', '_').replace('/', '_').replace('\\', '_')
+    safe_filename = ''.join(c for c in safe_filename if c.isalnum() or c in '_-.')
+    
+    # Si après nettoyage le nom est vide, utiliser un nom par défaut
+    if not safe_filename:
+        safe_filename = "carte_geocodage"
+    
+    html_filename = f"{safe_filename}.html"
+    excel_filename = f"{safe_filename}.xlsx"
 
     # Boutons de téléchargement
     col1, col2 = st.columns(2)
@@ -533,7 +693,7 @@ def display_results(geocoded_df, stats):
         st.download_button(
             "📥 Télécharger la carte (HTML)",
             data=html_buffer,
-            file_name="carte_geocodage.html",
+            file_name=html_filename,
             mime="text/html"
         )
 
@@ -545,7 +705,7 @@ def display_results(geocoded_df, stats):
         st.download_button(
             "📥 Télécharger les résultats (Excel)",
             data=excel_buffer,
-            file_name="resultats_geocodage.xlsx",
+            file_name=excel_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
@@ -582,6 +742,13 @@ def main():
         Cette application permet de géocoder des adresses à partir d'un fichier Excel
         et de visualiser les résultats sur une carte interactive.
     """)
+    with st.expander("**📖 Comment utiliser cette application**"):
+        st.markdown("""
+            1. **Chargement du fichier**: Cliquez sur le bouton ci-dessous pour charger un fichier Excel (.xlsx) contenant les colonnes: `street`, `postalcode`, `city`.
+            2. **Géocodage**: Cliquez sur le bouton pour lancer le géocodage des adresses.
+            3. **Résultats**: Les adresses géocodées seront affichées sur la carte et vous pourrez télécharger les résultats.
+        """)
+        st.info("💡 **Astuce**: Utilisez les options dans le panneau latéral pour personnaliser l'affichage de la carte.")
     
     # Section de chargement de fichier
     st.markdown("<h2>📁 Chargement du fichier</h2>", unsafe_allow_html=True)
